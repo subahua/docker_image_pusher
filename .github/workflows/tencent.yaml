@@ -11,6 +11,7 @@ env:
   TENCENT_NAME_SPACE: "${{ secrets.TENCENT_NAME_SPACE }}"
   TENCENT_REGISTRY_USER: "${{ secrets.TENCENT_REGISTRY_USER }}"
   TENCENT_REGISTRY_PASSWORD: "${{ secrets.TENCENT_REGISTRY_PASSWORD }}"
+  ERROR_LOG_FILE: error.log
 
 jobs:
   build:
@@ -18,25 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Setup Docker buildx
-        uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
+        uses: docker/setup-buildx-action@v2
 
       - name: Check out code
         uses: actions/checkout@v2
 
       - name: Build and push image TENCENT
         run: |
-          docker login https://ccr.ccs.tencentyun.com --username=$TENCENT_REGISTRY_USER --password $TENCENT_REGISTRY_PASSWORD
+          docker login https://ccr.ccs.tencentyun.com -u $TENCENT_REGISTRY_USER -p $TENCENT_REGISTRY_PASSWORD
           while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             echo "docker pull $line"
-            docker pull $line
-            # 获取镜像的完整名称，例如kasmweb/nginx:1.25.3（命名空间/镜像名:版本号）
+            docker pull "$line" || { echo "Failed to pull $line" >> $ERROR_LOG_FILE; }
             image=$(echo "$line" | awk '{print $NF}')
-            # 获取 镜像名:版本号  例如nginx:1.25.3
             image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
             new_image="ccr.ccs.tencentyun.com/$TENCENT_NAME_SPACE/$image_name_tag"
             echo "docker tag $image $new_image"
-            docker tag $image $new_image
+            docker tag "$image" "$new_image"
             echo "docker push $new_image"
-            docker push $new_image
+            docker push "$new_image"
           done < images.txt
