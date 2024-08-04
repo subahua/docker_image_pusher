@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日午夜执行
 
 permissions:
   contents: write
@@ -12,6 +14,7 @@ env:
   TENCENT_REGISTRY_USER: "${{ secrets.TENCENT_REGISTRY_USER }}"
   TENCENT_REGISTRY_PASSWORD: "${{ secrets.TENCENT_REGISTRY_PASSWORD }}"
   ERROR_LOG_FILE: error.log
+  IMAGE: mysql  # 默认镜像名称
 
 jobs:
   build:
@@ -24,18 +27,46 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v2
 
+      - name: Get all tags from Docker Hub
+        id: get_tags
+        run: |
+          # 登录 Docker Hub
+          echo ${{ secrets.DOCKERHUB_USERNAME }}:$DOCKERHUB_PASSWORD | docker login --username="${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          
+          # 获取 Docker Hub 上所有标签
+          tags=$(docker manifest inspect library/$IMAGE | jq -r '.references[].digest' | cut -d':' -f2)
+          echo "tags=$tags" >> $GITHUB_OUTPUT
+
       - name: Build and push image TENCENT
         run: |
+          # 登录腾讯云容器仓库
           docker login https://ccr.ccs.tencentyun.com -u $TENCENT_REGISTRY_USER -p $TENCENT_REGISTRY_PASSWORD
-          while IFS= read -r line; do
-            [[ -z "$line" ]] && continue
-            echo "docker pull $line"
-            docker pull "$line" || { echo "Failed to pull $line" >> $ERROR_LOG_FILE; }
-            image=$(echo "$line" | awk '{print $NF}')
-            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            new_image="ccr.ccs.tencentyun.com/$TENCENT_NAME_SPACE/$image_name_tag"
-            echo "docker tag $image $new_image"
-            docker tag "$image" "$new_image"
-            echo "docker push $new_image"
-            docker push "$new_image"
-          done < images.txt
+          
+          # 创建或清空错误日志文件
+          > $ERROR_LOG_FILE
+
+          # 遍历所有标签
+          for tag in $(echo "${{ steps.get_tags.outputs.tags }}" | tr ' ' '\n'); do
+            echo "Checking if $IMAGE:$tag is in private registry..."
+            
+            # 检查私有仓库是否已有该镜像
+            private_image="ccr.ccs.tencentyun.com/$TENCENT_NAME_SPACE/$IMAGE:$tag"
+            exists=$(docker manifest inspect "$private_image" 2>/dev/null)
+            if [[ -z "$exists" ]]; then
+              echo "Image not found in private registry. Pulling and pushing."
+              
+              # 拉取镜像
+              echo "docker pull library/$IMAGE:$tag"
+              docker pull "library/$IMAGE:$tag" || { echo "Failed to pull library/$IMAGE:$tag" >> $ERROR_LOG_FILE; continue; }
+
+              # 重新标记镜像
+              echo "docker tag library/$IMAGE:$tag $private_image"
+              docker tag "library/$IMAGE:$tag" "$private_image"
+
+              # 推送镜像到私有仓库
+              echo "docker push $private_image"
+              docker push "$private_image"
+            else
+              echo "Image already exists in private registry. Skipping."
+            fi
+          done
