@@ -31,7 +31,7 @@ jobs:
         id: get_tags
         run: |
           # 登录 Docker Hub
-          echo ${{ secrets.DOCKERHUB_USERNAME }}:$DOCKERHUB_PASSWORD | docker login --username="${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          docker login https://ccr.ccs.tencentyun.com -u $TENCENT_REGISTRY_USER -p $TENCENT_REGISTRY_PASSWORD
           
           # 获取 Docker Hub 上所有标签
           tags=$(docker manifest inspect library/$IMAGE | jq -r '.references[].digest' | cut -d':' -f2)
